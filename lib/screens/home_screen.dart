@@ -4,6 +4,9 @@ import 'login_screen.dart';
 import 'post_detail_screen.dart';
 import 'post_write_screen.dart';
 import 'package:flutter_svg/flutter_svg.dart';
+import 'bookmark_screen.dart';
+import 'subscription_screen.dart';
+import 'my_screen.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -18,7 +21,23 @@ class _HomeScreenState extends State<HomeScreen> {
   int _currentTab = 0;
   int _bottomNavIndex = 0;
   String _selectedCategory = '전체';
-  final List<String> _categories = ['전체', 'HOT', '캠퍼스', '정치', '사회'];
+  final List<String> _categories = ['전체', 'HOT', '캠퍼스', '정치', '사회', '기술', '환경', '문화', '교육'];
+
+  String timeAgo(String createdAt) {
+    final now = DateTime.now();
+    final post = DateTime.parse(createdAt).toLocal();
+    final diff = now.difference(post);
+
+    if (diff.inMinutes < 1) return '방금 전';
+    if (diff.inMinutes < 60) return '${diff.inMinutes}분 전';
+    if (diff.inHours < 24) return '${diff.inHours}시간 전';
+    if (diff.inDays < 30) return '${diff.inDays}일 전';
+    if (diff.inDays < 365) return '${diff.inDays ~/ 30}개월 전';
+    return '${diff.inDays ~/ 365}년 전';
+  }
+
+  Map<int, int> _participantCounts = {};
+  List<Map<String, dynamic>> _hotPosts = [];
 
   @override
   void initState() {
@@ -28,12 +47,38 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Future<void> _fetchPosts() async {
     setState(() => _isLoading = true);
-    final response = await Supabase.instance.client
-        .from('posts')
-        .select()
-        .order('created_at', ascending: false);
+
+    var response;
+
+    if (_selectedCategory == '전체' || _selectedCategory == 'HOT') {
+      response = await Supabase.instance.client
+          .from('posts')
+          .select('*, post_likes(count), comments(count)')
+          .order('created_at', ascending: false);
+    } else {
+      response = await Supabase.instance.client
+          .from('posts')
+          .select('*, post_likes(count), comments(count)')
+          .eq('category', _selectedCategory)
+          .order('created_at', ascending: false);
+    }
+
+    final participantData = await Supabase.instance.client
+        .from('post_participant_counts')
+        .select();
+
+    final Map<int, int> counts = {};
+    for (final row in participantData as List) {
+      counts[row['post_id']] = row['participant_count'];
+    }
+    final hotPosts = List<Map<String, dynamic>>.from(response);
+    hotPosts.sort((a, b) =>
+        (_participantCounts[b['id']] ?? 1).compareTo(_participantCounts[a['id']] ?? 1));
+
     setState(() {
       _posts = List<Map<String, dynamic>>.from(response);
+      _hotPosts = hotPosts.take(10).toList();
+      _participantCounts = counts;
       _isLoading = false;
     });
   }
@@ -45,8 +90,11 @@ class _HomeScreenState extends State<HomeScreen> {
 
     return Scaffold(
       backgroundColor: const Color.fromARGB(255, 255, 255, 255),
-      body: SafeArea(
-        child: Column(
+      body: IndexedStack(
+        index: _bottomNavIndex, 
+        children: [
+          SafeArea(
+            child: Column(
           children: [
             // 상단 앱바
             Padding(
@@ -104,7 +152,13 @@ class _HomeScreenState extends State<HomeScreen> {
                                   ),
                                 ),
                                 TextButton(
-                                  onPressed: () {},
+                                  onPressed: () {
+                                    setState(() {
+                                      _currentTab = 1;
+                                      _selectedCategory = 'HOT';
+                                      _fetchPosts();
+                                    });
+                                  },
                                   child: const Text(
                                     '더보기 >',
                                     style: TextStyle(color: Colors.grey, fontSize: 13),
@@ -125,9 +179,9 @@ class _HomeScreenState extends State<HomeScreen> {
                                       scrollDirection: Axis.horizontal,
                                       physics: const ClampingScrollPhysics(),
                                       padding: const EdgeInsets.symmetric(horizontal: 20),
-                                      itemCount: _posts.length > 5 ? 5 : _posts.length,
+                                      itemCount: _hotPosts.length > 5 ? 5 : _hotPosts.length,
                                       itemBuilder: (context, index) {
-                                        final post = _posts[index];
+                                        final post = _hotPosts[index];
                                         return GestureDetector(
                                           onTap: () async {
                                             await Navigator.push(
@@ -161,10 +215,19 @@ class _HomeScreenState extends State<HomeScreen> {
                                               crossAxisAlignment: CrossAxisAlignment.start,
                                               children: [
                                                 Text(
+                                                  post['category'] ?? '',
+                                                  style: const TextStyle(
+                                                    fontSize: 12,
+                                                    color: const Color(0xFFBDBDBD),
+                                                    fontWeight: FontWeight.w500,
+                                                  ),
+                                                ),
+                                                const SizedBox(height: 4),
+                                                Text(
                                                   post['title'] ?? '',
                                                   style: const TextStyle(
                                                     fontWeight: FontWeight.bold,
-                                                    fontSize: 14,
+                                                    fontSize: 22,
                                                   ),
                                                   maxLines: 2,
                                                   overflow: TextOverflow.ellipsis,
@@ -173,8 +236,8 @@ class _HomeScreenState extends State<HomeScreen> {
                                                 Text(
                                                   post['content'] ?? '',
                                                   style: const TextStyle(
-                                                    fontSize: 12,
-                                                    color: Colors.grey,
+                                                    fontSize: 14,
+                                                    color: const Color(0xFF626262),
                                                   ),
                                                   maxLines: 2,
                                                   overflow: TextOverflow.ellipsis,
@@ -183,13 +246,13 @@ class _HomeScreenState extends State<HomeScreen> {
                                                 Row(
                                                   children: [
                                                     const Icon(Icons.local_fire_department,
-                                                        color: Colors.orange, size: 16),
+                                                        color: const Color(0xFFFF7400), size: 16),
                                                     const SizedBox(width: 4),
                                                     Text(
-                                                      '${index * 100 + 75}명 참여중',
+                                                      '${_participantCounts[post['id']] ?? 1}명 참여중',
                                                       style: const TextStyle(
                                                         fontSize: 12,
-                                                        color: Colors.orange,
+                                                        color: const Color(0xFFFF7400),
                                                         fontWeight: FontWeight.bold,
                                                       ),
                                                     ),
@@ -225,16 +288,19 @@ class _HomeScreenState extends State<HomeScreen> {
                         children: [
                           // 카테고리 필터
                           SizedBox(
-                            height: 44,
+                            height: 60,
                             child: ListView.builder(
                               scrollDirection: Axis.horizontal,
-                              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+                              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 15),
                               itemCount: _categories.length,
                               itemBuilder: (context, index) {
                                 final cat = _categories[index];
                                 final isSelected = cat == _selectedCategory;
                                 return GestureDetector(
-                                  onTap: () => setState(() => _selectedCategory = cat),
+                                  onTap: () {
+                                    setState(() => _selectedCategory = cat);
+                                    _fetchPosts(); // 👈 추가
+                                  },
                                   child: Container(
                                     margin: const EdgeInsets.only(right: 8),
                                     padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
@@ -249,7 +315,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                       cat,
                                       style: TextStyle(
                                         fontSize: 13,
-                                        fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+                                        fontWeight: FontWeight.normal,
                                         color: isSelected ? Colors.white : Colors.black,
                                       ),
                                     ),
@@ -267,10 +333,15 @@ class _HomeScreenState extends State<HomeScreen> {
                                 : _posts.isEmpty
                                     ? const Center(child: Text('아직 글이 없어요'))
                                     : ListView.builder(
-                                        itemCount: _posts.length,
+                                        itemCount: _selectedCategory == 'HOT' 
+                                            ? _hotPosts.length 
+                                            : _posts.length,
                                         itemBuilder: (context, index) {
-                                          return _buildPostItem(_posts[index]);
-                                        },
+                                          final post = _selectedCategory == 'HOT' 
+                                              ? _hotPosts[index] 
+                                              : _posts[index];
+                                          return _buildPostItem(post);
+                                        }
                                       ),
                           ),
                         ],
@@ -279,8 +350,12 @@ class _HomeScreenState extends State<HomeScreen> {
             ),
           ],
         ),
+          ),
+          const BookmarkScreen(),
+          const SubscriptionScreen(),
+          const MyScreen(),
+        ],
       ),
-
       // 하단 네비게이션
       bottomNavigationBar: SizedBox(
         height: 74.1,
@@ -290,12 +365,14 @@ class _HomeScreenState extends State<HomeScreen> {
             setState(() => _bottomNavIndex = index);
           },
           type: BottomNavigationBarType.fixed,
+          selectedFontSize: 0,
+          unselectedFontSize: 0,
           items: [
             BottomNavigationBarItem(
               icon: SvgPicture.asset(
                 'assets/icons/home.svg',
-                width: 24.36,
-                height: 36.1,
+                width: 28.42,
+                height: 42.1,
                 colorFilter: const ColorFilter.mode(
                   Color(0xFFBBBBBB),
                   BlendMode.srcIn,
@@ -303,8 +380,8 @@ class _HomeScreenState extends State<HomeScreen> {
               ),
               activeIcon: SvgPicture.asset(
                 'assets/icons/home.svg',
-                width: 24.36,
-                height: 36.1,
+                width: 28.42,
+                height: 42.1,
                 colorFilter: const ColorFilter.mode(
                   Color(0xFF323232),
                   BlendMode.srcIn,
@@ -316,8 +393,8 @@ class _HomeScreenState extends State<HomeScreen> {
             BottomNavigationBarItem(
               icon: SvgPicture.asset(
                 'assets/icons/haert.svg',
-                width: 24.36,
-                height: 36.1,
+                width: 28.42,
+                height: 42.1,
                 colorFilter: const ColorFilter.mode(
                   Color(0xFFBBBBBB),
                   BlendMode.srcIn,
@@ -325,8 +402,8 @@ class _HomeScreenState extends State<HomeScreen> {
               ),
               activeIcon: SvgPicture.asset(
                 'assets/icons/haert.svg',
-                width: 24.36,
-                height: 36.1,
+                width: 28.42,
+                height: 42.1,
                 colorFilter: const ColorFilter.mode(
                   Color(0xFF323232),
                   BlendMode.srcIn,
@@ -338,8 +415,8 @@ class _HomeScreenState extends State<HomeScreen> {
             BottomNavigationBarItem(
               icon: SvgPicture.asset(
                 'assets/icons/supscription.svg',
-                width: 24.36,
-                height: 36.1,
+                width: 28.42,
+                height: 42.1,
                 colorFilter: const ColorFilter.mode(
                   Color(0xFFBBBBBB),
                   BlendMode.srcIn,
@@ -347,8 +424,8 @@ class _HomeScreenState extends State<HomeScreen> {
               ),
               activeIcon: SvgPicture.asset(
                 'assets/icons/supscription.svg',
-                width: 24.36,
-                height: 36.1,
+                width: 28.42,
+                height: 42.1,
                 colorFilter: const ColorFilter.mode(
                   Color(0xFF323232),
                   BlendMode.srcIn,
@@ -360,8 +437,8 @@ class _HomeScreenState extends State<HomeScreen> {
             BottomNavigationBarItem(
               icon: SvgPicture.asset(
                 'assets/icons/my.svg',
-                width: 24.36,
-                height: 36.1,
+                width: 28.42,
+                height: 42.1,
                 colorFilter: const ColorFilter.mode(
                   Color(0xFFBBBBBB),
                   BlendMode.srcIn,
@@ -369,8 +446,8 @@ class _HomeScreenState extends State<HomeScreen> {
               ),
               activeIcon: SvgPicture.asset(
                 'assets/icons/my.svg',
-                width: 24.36,
-                height: 36.1,
+                width: 28.42,
+                height: 42.1,
                 colorFilter: const ColorFilter.mode(
                   Color(0xFF323232),
                   BlendMode.srcIn,
@@ -381,8 +458,10 @@ class _HomeScreenState extends State<HomeScreen> {
           ],
         ),
       ),
+    
       // 글쓰기 버튼
-      floatingActionButton: FloatingActionButton(
+      floatingActionButton: _bottomNavIndex == 0
+      ? FloatingActionButton(
         onPressed: () async {
           await Navigator.push(
             context,
@@ -396,7 +475,8 @@ class _HomeScreenState extends State<HomeScreen> {
           borderRadius: BorderRadius.circular(23), 
         ),
         child: const Icon(Icons.edit, color: const Color(0xFF323232)),
-      ),
+      )
+      : null,
     );
   }
 
@@ -404,7 +484,13 @@ class _HomeScreenState extends State<HomeScreen> {
   final isSelected = _currentTab == index;
 
   return GestureDetector(
-    onTap: () => setState(() => _currentTab = index),
+    onTap: () => setState(() { 
+      _currentTab = index; 
+      if (index == 0) {
+        _selectedCategory = '전체'; 
+        _fetchPosts();
+      }
+    }),
     child: Container(
       width: double.infinity,
       alignment: Alignment.center,
@@ -413,7 +499,7 @@ class _HomeScreenState extends State<HomeScreen> {
         border: Border(
           bottom: BorderSide(
             color: isSelected ? Colors.black : Colors.transparent,
-            width: 2,
+            width: 1,
           ),
         ),
       ),
@@ -465,16 +551,21 @@ Widget _buildPostItem(Map<String, dynamic> post) {
           const SizedBox(height: 8),
           Row(
             children: [
-              const Icon(Icons.thumb_up_outlined, size: 14, color: Colors.grey),
+              const Icon(Icons.thumb_up_outlined, size: 14,color: const Color(0xFF5FD55F)),
               const SizedBox(width: 4),
-              const Text('0', style: TextStyle(fontSize: 12, color: Colors.grey)),
+              Text(
+                    '${post['post_likes'][0]['count'] ?? 0}',
+                    style: const TextStyle(fontSize: 12, color: Colors.black),
+                  ),
               const SizedBox(width: 12),
-              const Icon(Icons.comment_outlined, size: 14, color: Colors.grey),
+              const Icon(Icons.comment_outlined, size: 14, color: const Color(0xFF5FD55F)),
               const SizedBox(width: 4),
-              const Text('0', style: TextStyle(fontSize: 12, color: Colors.grey)),
+              Text('${post['comments'][0]['count'] ?? 0}',
+                    style: const TextStyle(fontSize: 12, color: Colors.black),
+                  ),
               const SizedBox(width: 12),
-              const Text('1분 전', style: TextStyle(fontSize: 12, color: Colors.grey)),
-              const Spacer(),
+              Text(timeAgo(post['created_at']),),
+              const SizedBox(width: 12),
               Text(
                 post['email'] ?? '익명',
                 style: const TextStyle(fontSize: 12, color: Colors.grey),
