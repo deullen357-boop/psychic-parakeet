@@ -2,7 +2,18 @@ import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 class PostWriteScreen extends StatefulWidget {
-  const PostWriteScreen({super.key});
+  final int? editPostId;
+  final String? initialTitle;
+  final String? initialContent;
+  final String? initialCategory;
+
+  const PostWriteScreen({
+    super.key,
+    this.editPostId,
+    this.initialTitle,
+    this.initialContent,
+    this.initialCategory,
+  });
 
   @override
   State<PostWriteScreen> createState() => _PostWriteScreenState();
@@ -25,6 +36,9 @@ class _PostWriteScreenState extends State<PostWriteScreen> {
   @override
   void initState() {
     super.initState();
+    if (widget.initialTitle != null) _titleController.text = widget.initialTitle!;
+    if (widget.initialContent != null) _contentController.text = widget.initialContent!;
+    if (widget.initialCategory != null) _selectedCategory = widget.initialCategory!;
     _titleController.addListener(() => setState(() {}));
     _contentController.addListener(() => setState(() {}));
     _fetchBookmarkedCategories();
@@ -49,15 +63,23 @@ class _PostWriteScreenState extends State<PostWriteScreen> {
     setState(() => _isLoading = true);
     try {
       final user = Supabase.instance.client.auth.currentUser;
-      await Supabase.instance.client.from('posts').insert({
-        'title': _titleController.text.trim(),
-        'content': _contentController.text.trim(),
-        'email': _isAnonymous ? '익명' : (user?.email ?? '익명'),
-        'user_id': user?.id,
-        'category': _selectedCategory,
-        'likes': 0,
-        'bookmarks': 0,
-      });
+      if (widget.editPostId != null) {
+        await Supabase.instance.client.from('posts').update({
+          'title': _titleController.text.trim(),
+          'content': _contentController.text.trim(),
+          'category': _selectedCategory,
+        }).eq('id', widget.editPostId!);
+      } else {
+        await Supabase.instance.client.from('posts').insert({
+          'title': _titleController.text.trim(),
+          'content': _contentController.text.trim(),
+          'email': '익명',
+          'user_id': user?.id,
+          'category': _selectedCategory,
+          'likes': 0,
+          'bookmarks': 0,
+        });
+      }
       if (mounted) Navigator.pop(context);
     } catch (e) {
       if (mounted) {

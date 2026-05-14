@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
-import 'login_screen.dart';
 import 'post_detail_screen.dart';
 import 'post_write_screen.dart';
 import 'package:flutter_svg/flutter_svg.dart';
@@ -20,6 +19,7 @@ class _HomeScreenState extends State<HomeScreen> {
   bool _isLoading = true;
   int _currentTab = 0;
   int _bottomNavIndex = 0;
+  Key _myKey = UniqueKey();
   String _selectedCategory = '전체';
   final List<String> _categories = ['전체', 'HOT', '캠퍼스', '정치', '사회', '기술', '환경', '문화', '교육'];
 
@@ -47,40 +47,59 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Future<void> _fetchPosts() async {
     setState(() => _isLoading = true);
+    try {
+      // ignore: avoid_print
+      print('[home] step=posts');
+      var response;
+      if (_selectedCategory == '전체' || _selectedCategory == 'HOT') {
+        response = await Supabase.instance.client
+            .from('posts')
+            .select('*, post_likes(count), comments(count)')
+            .order('created_at', ascending: false);
+      } else {
+        response = await Supabase.instance.client
+            .from('posts')
+            .select('*, post_likes(count), comments(count)')
+            .eq('category', _selectedCategory)
+            .order('created_at', ascending: false);
+      }
 
-    var response;
+      // ignore: avoid_print
+      print('[home] step=participant_counts');
+      final participantData = await Supabase.instance.client
+          .from('post_participant_counts')
+          .select();
 
-    if (_selectedCategory == '전체' || _selectedCategory == 'HOT') {
-      response = await Supabase.instance.client
-          .from('posts')
-          .select('*, post_likes(count), comments(count)')
-          .order('created_at', ascending: false);
-    } else {
-      response = await Supabase.instance.client
-          .from('posts')
-          .select('*, post_likes(count), comments(count)')
-          .eq('category', _selectedCategory)
-          .order('created_at', ascending: false);
+      // ignore: avoid_print
+      print('[home] step=count_map');
+      final Map<int, int> counts = {};
+      for (final row in participantData as List) {
+        final pid = row['post_id'];
+        final pc = row['participant_count'];
+        if (pid is int && pc is int) counts[pid] = pc;
+      }
+      final hotPosts = List<Map<String, dynamic>>.from(response);
+      hotPosts.sort((a, b) =>
+          (_participantCounts[b['id']] ?? 1).compareTo(_participantCounts[a['id']] ?? 1));
+
+      if (!mounted) return;
+      setState(() {
+        _posts = List<Map<String, dynamic>>.from(response);
+        _hotPosts = hotPosts.take(10).toList();
+        _participantCounts = counts;
+        _isLoading = false;
+      });
+      // ignore: avoid_print
+      print('[home] done. posts=${_posts.length}');
+    } catch (e, st) {
+      // ignore: avoid_print
+      print('=== home fetchPosts ERROR ===');
+      // ignore: avoid_print
+      print(e);
+      // ignore: avoid_print
+      print(st);
+      if (mounted) setState(() => _isLoading = false);
     }
-
-    final participantData = await Supabase.instance.client
-        .from('post_participant_counts')
-        .select();
-
-    final Map<int, int> counts = {};
-    for (final row in participantData as List) {
-      counts[row['post_id']] = row['participant_count'];
-    }
-    final hotPosts = List<Map<String, dynamic>>.from(response);
-    hotPosts.sort((a, b) =>
-        (_participantCounts[b['id']] ?? 1).compareTo(_participantCounts[a['id']] ?? 1));
-
-    setState(() {
-      _posts = List<Map<String, dynamic>>.from(response);
-      _hotPosts = hotPosts.take(10).toList();
-      _participantCounts = counts;
-      _isLoading = false;
-    });
   }
 
   @override
@@ -353,7 +372,7 @@ class _HomeScreenState extends State<HomeScreen> {
           ),
           const BookmarkScreen(),
           const SubscriptionScreen(),
-          const MyScreen(),
+          MyScreen(key: _myKey),
         ],
       ),
       // 하단 네비게이션
@@ -362,7 +381,10 @@ class _HomeScreenState extends State<HomeScreen> {
         child: BottomNavigationBar(
           currentIndex: _bottomNavIndex,
           onTap: (index) {
-            setState(() => _bottomNavIndex = index);
+            setState(() {
+              _bottomNavIndex = index;
+              if (index == 3) _myKey = UniqueKey();
+            });
           },
           type: BottomNavigationBarType.fixed,
           selectedFontSize: 0,
@@ -566,9 +588,9 @@ Widget _buildPostItem(Map<String, dynamic> post) {
               const SizedBox(width: 12),
               Text(timeAgo(post['created_at']),),
               const SizedBox(width: 12),
-              Text(
-                post['email'] ?? '익명',
-                style: const TextStyle(fontSize: 12, color: Colors.grey),
+              const Text(
+                '익명',
+                style: TextStyle(fontSize: 12, color: Colors.grey),
               ),
             ],
           ),

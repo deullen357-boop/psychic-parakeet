@@ -1,5 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'post_write_screen.dart';
+import '../services/minimax_service.dart';
+import '../services/badge_store.dart';
 
 class PostDetailScreen extends StatefulWidget {
   final int postId;
@@ -26,8 +29,28 @@ class _PostDetailScreenState extends State<PostDetailScreen> {
   int? _highlightedCommentId; // 초록 배경 줄 댓글 id
 
   List<Map<String, dynamic>> _commentLikes = [];
+  final Map<String, int> _anonMap = {};
+  Map<String, BadgeEntry> _badges = {};
 
   final FocusNode _commentFocusNode = FocusNode();
+
+  String _anonLabel(dynamic userId) {
+    if (userId == null) return '익명';
+    final key = userId.toString();
+    if (!_anonMap.containsKey(key)) {
+      _anonMap[key] = _anonMap.length + 1;
+    }
+    return '익명${_anonMap[key]}';
+  }
+
+  void _rebuildAnonMap() {
+    _anonMap.clear();
+    final sorted = [..._comments]
+      ..sort((a, b) => (a['created_at'] ?? '').toString().compareTo((b['created_at'] ?? '').toString()));
+    for (final c in sorted) {
+      _anonLabel(c['user_id']);
+    }
+  }
 
   @override
   void dispose() {
@@ -69,68 +92,99 @@ class _PostDetailScreenState extends State<PostDetailScreen> {
 
   Future<void> _fetchData() async {
     setState(() => _isLoading = true);
-    final user = Supabase.instance.client.auth.currentUser;
+    try {
+      // ignore: avoid_print
+      print('[fetch] step=user');
+      final user = Supabase.instance.client.auth.currentUser;
 
-    final post = await Supabase.instance.client
-        .from('posts')
-        .select()
-        .eq('id', widget.postId)
-        .single();
+      // ignore: avoid_print
+      print('[fetch] step=post id=${widget.postId}');
+      final post = await Supabase.instance.client
+          .from('posts')
+          .select()
+          .eq('id', widget.postId)
+          .single();
 
-    final comments = await Supabase.instance.client
-        .from('comments')
-        .select()
-        .eq('post_id', widget.postId)
-        .order('created_at', ascending: true);
+      // ignore: avoid_print
+      print('[fetch] step=comments');
+      final comments = await Supabase.instance.client
+          .from('comments')
+          .select()
+          .eq('post_id', widget.postId)
+          .order('created_at', ascending: true);
 
-    // 조회수 +1
-    await Supabase.instance.client
-        .from('posts')
-        .update({'views': (post['views'] ?? 0) + 1})
-        .eq('id', widget.postId);
+      // ignore: avoid_print
+      print('[fetch] step=update views');
+      await Supabase.instance.client
+          .from('posts')
+          .update({'views': (post['views'] ?? 0) + 1})
+          .eq('id', widget.postId);
 
-    // 공감 수
-    final likes = await Supabase.instance.client
-        .from('post_likes')
-        .select()
-        .eq('post_id', widget.postId);
+      // ignore: avoid_print
+      print('[fetch] step=likes');
+      final likes = await Supabase.instance.client
+          .from('post_likes')
+          .select()
+          .eq('post_id', widget.postId);
 
-    // 관심 수
-    final bookmarks = await Supabase.instance.client
-        .from('post_bookmarks')
-        .select()
-        .eq('post_id', widget.postId);
+      // ignore: avoid_print
+      print('[fetch] step=bookmarks');
+      final bookmarks = await Supabase.instance.client
+          .from('post_bookmarks')
+          .select()
+          .eq('post_id', widget.postId);
 
-    // 내가 눌렀는지 확인
-    final myLike = await Supabase.instance.client
-        .from('post_likes')
-        .select()
-        .eq('post_id', widget.postId)
-        .eq('user_id', user?.id ?? '');
+      List myLike = [];
+      List myBookmark = [];
+      if (user != null) {
+        myLike = await Supabase.instance.client
+            .from('post_likes')
+            .select()
+            .eq('post_id', widget.postId)
+            .eq('user_id', user.id);
 
-    final myBookmark = await Supabase.instance.client
-        .from('post_bookmarks')
-        .select()
-        .eq('post_id', widget.postId)
-        .eq('user_id', user?.id ?? '');
+        myBookmark = await Supabase.instance.client
+            .from('post_bookmarks')
+            .select()
+            .eq('post_id', widget.postId)
+            .eq('user_id', user.id);
+      }
 
-    // 댓글 좋아요/싫어요 가져오기
-    final commentLikes = await Supabase.instance.client
-        .from('comment_likes')
-        .select()
-        .inFilter('comment_id', (comments as List).map((c) => c['id']).toList());
+      final commentIds = (comments as List)
+          .map((c) => c['id'])
+          .whereType<int>()
+          .toList();
+      List commentLikes = [];
+      if (commentIds.isNotEmpty) {
+        commentLikes = await Supabase.instance.client
+            .from('comment_likes')
+            .select()
+            .inFilter('comment_id', commentIds);
+      }
 
-    setState(() {
-      _post = {...post, 'views': (post['views'] ?? 0) + 1};
-      _commentLikes = List<Map<String, dynamic>>.from(commentLikes);
-      _comments = List<Map<String, dynamic>>.from(comments);
-      _likesCount = (likes as List).length;
-      _bookmarksCount = (bookmarks as List).length;
-      _commentsCount = (comments as List).length;
-      _isLiked = (myLike as List).isNotEmpty;
-      _isBookmarked = (myBookmark as List).isNotEmpty;
-      _isLoading = false;
-    });
+      final badges = await BadgeStore.all();
+      setState(() {
+        _post = {...post, 'views': (post['views'] ?? 0) + 1};
+        _commentLikes = List<Map<String, dynamic>>.from(commentLikes);
+        _comments = List<Map<String, dynamic>>.from(comments);
+        _likesCount = (likes as List).length;
+        _bookmarksCount = (bookmarks as List).length;
+        _commentsCount = (comments as List).length;
+        _isLiked = myLike.isNotEmpty;
+        _isBookmarked = myBookmark.isNotEmpty;
+        _badges = badges;
+        _rebuildAnonMap();
+      });
+    } catch (e, st) {
+      // ignore: avoid_print
+      print('=== fetchData ERROR ===');
+      // ignore: avoid_print
+      print(e);
+      // ignore: avoid_print
+      print(st);
+    } finally {
+      setState(() => _isLoading = false);
+    }
   }
 
   Future<void> _toggleLike() async {
@@ -186,21 +240,103 @@ class _PostDetailScreenState extends State<PostDetailScreen> {
   Future<void> _submitComment() async {
     if (_commentController.text.trim().isEmpty) return;
     final user = Supabase.instance.client.auth.currentUser;
-    await Supabase.instance.client.from('comments').insert({
-      'post_id': widget.postId,
-      'content': _commentController.text.trim(),
-      'email': user?.email ?? '익명',
-      'user_id': user?.id,
-      'parent_id': _replyToCommentId,
-    });
+    final text = _commentController.text.trim();
+
+    final inserted = await Supabase.instance.client
+        .from('comments')
+        .insert({
+          'post_id': widget.postId,
+          'content': text,
+          'email': user?.email ?? '익명',
+          'user_id': user?.id,
+          'parent_id': _replyToCommentId,
+        })
+        .select()
+        .single();
+
     _commentController.clear();
     setState(() {
       _replyToCommentId = null;
       _replyToEmail = null;
-      _highlightedCommentId = null; 
-      _commentController.clear();
+      _highlightedCommentId = null;
     });
-    _fetchData();
+    _fetchData(); // 댓글 즉시 표시
+
+    // AI 분류는 백그라운드 — 결과 나오면 배지/점수 저장 + 다시 새로고침
+    final previous = _comments
+        .map((c) => (c['content'] ?? '').toString())
+        .toList();
+    final commentId = inserted['id'] as int;
+    final userId = user?.id ?? '';
+    () async {
+      try {
+        final badge = await MinimaxService.classify(
+          newComment: text,
+          previousComments: previous,
+        );
+        debugPrint('[badge] result: key=${badge.key} score=${badge.score}');
+        if (badge.key == null) return;
+        await BadgeStore.save(
+          commentId: commentId,
+          badge: badge.key!,
+          score: badge.score,
+          userId: userId,
+        );
+        if (mounted) _fetchData();
+      } catch (e) {
+        debugPrint('[badge] error: $e');
+      }
+    }();
+  }
+
+  Widget _badgeChip(Map<String, dynamic> comment) {
+    final entry = _badges[(comment['id']).toString()];
+    if (entry == null) return const SizedBox.shrink();
+    final key = entry.badge;
+    if (key == 'none') return const SizedBox.shrink();
+    final score = entry.score;
+    final isBad = key == 'aggressive';
+    final bg = isBad ? const Color(0xFFFFE2E2) : const Color(0xFFE7F8DC);
+    final fg = isBad ? const Color(0xFFE53935) : const Color(0xFF2E7D32);
+    String label;
+    switch (key) {
+      case 'logical':
+        label = '완전 논리적이에요!';
+        break;
+      case 'evidence':
+        label = '근거 자료 보충!';
+        break;
+      case 'new_perspective':
+        label = '새로운 관점이네요!';
+        break;
+      case 'aggressive':
+        label = '공격적 표현을 사용했어요!';
+        break;
+      default:
+        return const SizedBox.shrink();
+    }
+    final scoreStr = score > 0 ? '+$score' : '$score';
+    return Padding(
+      padding: const EdgeInsets.only(top: 6, left: 10),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+        decoration: BoxDecoration(
+          color: bg,
+          borderRadius: BorderRadius.circular(20),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text('$label $scoreStr',
+                style: TextStyle(
+                    color: fg, fontWeight: FontWeight.bold, fontSize: 12)),
+            const SizedBox(width: 4),
+            Icon(isBad ? Icons.warning_rounded : Icons.check_circle,
+                color: fg, size: 14),
+          ],
+        ),
+      ),
+    );
   }
 
   Future<void> _toggleCommentLike(int commentId, bool isLike) async {
@@ -286,9 +422,9 @@ class _PostDetailScreenState extends State<PostDetailScreen> {
                           Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              Text(
-                                _post?['email']?.split('@')[0] ?? '익명',
-                                style: const TextStyle(
+                              const Text(
+                                '익명',
+                                style: TextStyle(
                                   fontWeight: FontWeight.bold,
                                   fontSize: 14,
                                 ),
@@ -385,12 +521,35 @@ class _PostDetailScreenState extends State<PostDetailScreen> {
                                 ],
                               );
 
-                              if (result == 'share') {
-                                // 공유하기 로직
-                              } else if (result == 'edit') {
-                                // 수정하기 로직
+                              if (result == 'edit') {
+                                await Navigator.push(
+                                  context,
+                                  MaterialPageRoute(
+                                    builder: (_) => PostWriteScreen(
+                                      editPostId: widget.postId,
+                                      initialTitle: _post?['title'],
+                                      initialContent: _post?['content'],
+                                      initialCategory: _post?['category'],
+                                    ),
+                                  ),
+                                );
+                                _fetchData();
                               } else if (result == 'delete') {
-                                // 삭제하기 로직
+                                final confirm = await showDialog<bool>(
+                                  context: context,
+                                  builder: (_) => AlertDialog(
+                                    title: const Text('글 삭제'),
+                                    content: const Text('정말 삭제하시겠어요?'),
+                                    actions: [
+                                      TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('취소')),
+                                      TextButton(onPressed: () => Navigator.pop(context, true), child: const Text('삭제', style: TextStyle(color: Colors.red))),
+                                    ],
+                                  ),
+                                );
+                                if (confirm == true) {
+                                  await Supabase.instance.client.from('posts').delete().eq('id', widget.postId);
+                                  if (mounted) Navigator.pop(context);
+                                }
                               }
                             },
                           ),
@@ -612,7 +771,7 @@ Widget _buildCommentItem(Map<String, dynamic> comment, {List<Map<String, dynamic
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    comment['email']?.split('@')[0] ?? '익명',
+                    _anonLabel(comment['user_id']),
                     style: const TextStyle(
                       fontWeight: FontWeight.bold,
                       fontSize: 13,
@@ -629,9 +788,55 @@ Widget _buildCommentItem(Map<String, dynamic> comment, {List<Map<String, dynamic
               ),
               const Spacer(),
               IconButton(
-                icon: const Icon(Icons.more_vert,
-                    color: Colors.grey, size: 18),
-                onPressed: () {},
+                icon: const Icon(Icons.more_vert, color: Colors.grey, size: 18),
+                onPressed: () async {
+                  final user = Supabase.instance.client.auth.currentUser;
+                  final isAuthor = user?.id == comment['user_id'];
+                  final result = await showModalBottomSheet<String>(
+                    context: context,
+                    shape: const RoundedRectangleBorder(
+                      borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+                    ),
+                    builder: (_) => SafeArea(
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          if (isAuthor)
+                            ListTile(
+                              leading: const Icon(Icons.delete_outline, color: Colors.red),
+                              title: const Text('삭제하기', style: TextStyle(color: Colors.red)),
+                              onTap: () => Navigator.pop(context, 'delete'),
+                            ),
+                          if (!isAuthor)
+                            ListTile(
+                              leading: const Icon(Icons.flag_outlined, color: Colors.grey),
+                              title: const Text('신고하기'),
+                              onTap: () => Navigator.pop(context, 'report'),
+                            ),
+                        ],
+                      ),
+                    ),
+                  );
+                  if (result == 'delete') {
+                    final confirm = await showDialog<bool>(
+                      context: context,
+                      builder: (_) => AlertDialog(
+                        title: const Text('댓글 삭제'),
+                        content: const Text('정말 삭제하시겠어요?'),
+                        actions: [
+                          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('취소')),
+                          TextButton(onPressed: () => Navigator.pop(context, true), child: const Text('삭제', style: TextStyle(color: Colors.red))),
+                        ],
+                      ),
+                    );
+                    if (confirm == true) {
+                      await Supabase.instance.client.from('comments').delete().eq('id', comment['id']);
+                      _fetchData();
+                    }
+                  } else if (result == 'report') {
+                    if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('신고가 접수되었어요')));
+                  }
+                },
               ),
             ],
           ),
@@ -643,6 +848,7 @@ Widget _buildCommentItem(Map<String, dynamic> comment, {List<Map<String, dynamic
               style: const TextStyle(fontSize: 14, height: 1.5),
             ),
           ),
+          _badgeChip(comment),
           const SizedBox(height: 8),
           Padding(
             padding: const EdgeInsets.only(left: 10),
@@ -652,7 +858,7 @@ Widget _buildCommentItem(Map<String, dynamic> comment, {List<Map<String, dynamic
                   onTap: () {
                     setState(() {
                       _replyToCommentId = comment['id'];
-                      _replyToEmail = comment['email']?.split('@')[0] ?? '익명';
+                      _replyToEmail = _anonLabel(comment['user_id']);
                       _highlightedCommentId = comment['id']; // 답글은 reply['id']
                      });
                     FocusScope.of(context).requestFocus(_commentFocusNode); // 입력창 포커스
@@ -713,7 +919,7 @@ Widget _buildCommentItem(Map<String, dynamic> comment, {List<Map<String, dynamic
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
-                          reply['email']?.split('@')[0] ?? '익명',
+                          _anonLabel(reply['user_id']),
                           style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
                         ),
                         Text(
@@ -725,7 +931,54 @@ Widget _buildCommentItem(Map<String, dynamic> comment, {List<Map<String, dynamic
                     const Spacer(),
                     IconButton(
                       icon: const Icon(Icons.more_vert, color: Colors.grey, size: 18),
-                      onPressed: () {},
+                      onPressed: () async {
+                        final replyUser = Supabase.instance.client.auth.currentUser;
+                        final isAuthor = replyUser?.id == reply['user_id'];
+                        final result = await showModalBottomSheet<String>(
+                          context: context,
+                          shape: const RoundedRectangleBorder(
+                            borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+                          ),
+                          builder: (_) => SafeArea(
+                            child: Column(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                if (isAuthor)
+                                  ListTile(
+                                    leading: const Icon(Icons.delete_outline, color: Colors.red),
+                                    title: const Text('삭제하기', style: TextStyle(color: Colors.red)),
+                                    onTap: () => Navigator.pop(context, 'delete'),
+                                  ),
+                                if (!isAuthor)
+                                  ListTile(
+                                    leading: const Icon(Icons.flag_outlined, color: Colors.grey),
+                                    title: const Text('신고하기'),
+                                    onTap: () => Navigator.pop(context, 'report'),
+                                  ),
+                              ],
+                            ),
+                          ),
+                        );
+                        if (result == 'delete') {
+                          final confirm = await showDialog<bool>(
+                            context: context,
+                            builder: (_) => AlertDialog(
+                              title: const Text('답글 삭제'),
+                              content: const Text('정말 삭제하시겠어요?'),
+                              actions: [
+                                TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('취소')),
+                                TextButton(onPressed: () => Navigator.pop(context, true), child: const Text('삭제', style: TextStyle(color: Colors.red))),
+                              ],
+                            ),
+                          );
+                          if (confirm == true) {
+                            await Supabase.instance.client.from('comments').delete().eq('id', reply['id']);
+                            _fetchData();
+                          }
+                        } else if (result == 'report') {
+                          if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('신고가 접수되었어요')));
+                        }
+                      },
                     ),
                   ],
                 ),
@@ -736,7 +989,7 @@ Widget _buildCommentItem(Map<String, dynamic> comment, {List<Map<String, dynamic
                     text: TextSpan(
                       children: [
                         TextSpan(
-                          text: '@${comment['email']?.split('@')[0] ?? '익명'} ',
+                          text: '@${_anonLabel(comment['user_id'])} ',
                           style: const TextStyle(
                             fontSize: 14,
                             color: Colors.green,
@@ -751,6 +1004,7 @@ Widget _buildCommentItem(Map<String, dynamic> comment, {List<Map<String, dynamic
                     ),
                   ),
                 ),
+                _badgeChip(reply),
                 const SizedBox(height: 8),
                 Padding(
                   padding: const EdgeInsets.only(left: 10),
@@ -760,7 +1014,7 @@ Widget _buildCommentItem(Map<String, dynamic> comment, {List<Map<String, dynamic
                         onTap: () {
                           setState(() {
                             _replyToCommentId = reply['id'];
-                            _replyToEmail = reply['email']?.split('@')[0] ?? '익명';
+                            _replyToEmail = _anonLabel(reply['user_id']);
                             _highlightedCommentId = reply['id']; // 답글은 reply['id']
                           });
                           FocusScope.of(context).requestFocus(_commentFocusNode); // 입력창 포커

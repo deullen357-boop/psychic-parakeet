@@ -1,3 +1,10 @@
+# Secrets
+.env
+
+# Cache-bust build artifacts
+build/web/main.*.dart.js
+build/web/flutter_bootstrap.js.bak*
+
 # Miscellaneous
 *.class
 *.log
